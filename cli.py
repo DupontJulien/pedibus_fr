@@ -1,29 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Interface en ligne de commande du projet Pedibus.
+"""Command-line interface.
 
-    python cli.py tout              pipeline complet
-    python cli.py preparer          Excel -> table normalisee
-    python cli.py geocoder          adresses -> lat / lon
-    python cli.py grouper           regroupement par distance
-    python cli.py carte             carte HTML
-    python cli.py reglages          affiche la configuration courante
-    python cli.py --help            aide
+    python cli.py all          full pipeline
+    python cli.py prepare      spreadsheet -> normalised table
+    python cli.py geocode      addresses -> lat / lon
+    python cli.py cluster      group by distance
+    python cli.py map          HTML map
+    python cli.py settings     show current configuration
+    python cli.py --help
 """
 
 import json
-from typing import Optional
 
 import pandas as pd
 import typer
 from rich.console import Console
 from rich.table import Table
 
-import carte as module_carte
-import clusters
+import clustering
 import config
-import geocodage
-import preparation
+import geocoding
+import mapping
+import survey
 
 app = typer.Typer(
     add_completion=False,
@@ -33,186 +32,164 @@ app = typer.Typer(
 console = Console()
 
 
-# --------------------------------------------------------------------------
-# Utilitaires
-# --------------------------------------------------------------------------
-def _exige(chemin, commande):
-    if not chemin.exists():
-        console.print(f"[red]Fichier manquant :[/red] {chemin}")
-        console.print(f"Lance d'abord [bold]python cli.py {commande}[/bold].")
+def _require(path, command):
+    if not path.exists():
+        console.print(f"[red]Fichier manquant :[/red] {path}")
+        console.print(f"Lance d'abord [bold]python cli.py {command}[/bold].")
         raise typer.Exit(1)
 
 
-def _titre(texte):
-    console.print(f"\n[bold]{texte}[/bold]")
-
-
-def _table_groupes(recap, seuil):
-    t = Table(show_header=True, header_style="bold")
-    t.add_column("Groupe", overflow="fold")
-    t.add_column("Foyers", justify="right")
-    t.add_column("Accomp.", justify="right")
-    t.add_column("dont fixes", justify="right")
-    for cid, r in recap.iterrows():
-        pret = r.accompagnants >= seuil
-        t.add_row(
-            f"[green]{r.rues}[/green]" if pret else r.rues,
-            str(r.foyers),
-            f"[bold green]{r.accompagnants}[/bold green]" if pret else str(r.accompagnants),
-            str(r.fixes),
+def _summary_table(summary, threshold):
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Groupe", overflow="fold")
+    table.add_column("Foyers", justify="right")
+    table.add_column("Accomp.", justify="right")
+    table.add_column("dont fixes", justify="right")
+    for _, row in summary.iterrows():
+        ready = row.volunteers >= threshold
+        table.add_row(
+            f"[green]{row.streets}[/green]" if ready else row.streets,
+            str(row.households),
+            f"[bold green]{row.volunteers}[/bold green]" if ready else str(row.volunteers),
+            str(row.fixed),
         )
-    return t
+    return table
 
 
-# --------------------------------------------------------------------------
-# Etape 1
-# --------------------------------------------------------------------------
 @app.command()
-def preparer():
-    """Lit l'Excel et le normalise : doublons, adresses, rues, engagement."""
-    _titre("1. Preparation")
-    if not config.EXCEL.exists():
-        console.print(f"[red]Introuvable :[/red] {config.EXCEL}")
-        console.print("Depose le .xlsx dans data/ ou corrige EXCEL dans config.py.")
+def prepare():
+    """Lit le fichier du sondage et le normalise."""
+    console.print("\n[bold]1. Preparation[/bold]")
+    if not config.SURVEY_FILE.exists():
+        console.print(f"[red]Introuvable :[/red] {config.SURVEY_FILE}")
+        console.print("Depose le fichier dans data/ ou corrige SURVEY_FILE "
+                      "dans config.py.")
         raise typer.Exit(1)
 
-    config.SORTIE.mkdir(parents=True, exist_ok=True)
-    df = preparation.charger()
-    df.to_csv(config.FICHIER_NORMALISE, index=False, encoding="utf-8-sig")
+    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    df, duplicates = survey.load()
+    df.to_csv(config.NORMALISED_FILE, index=False, encoding="utf-8-sig")
 
-    dedans = int((df.Perimetre == "Chatel").sum())
-    console.print(f"   {len(df)} foyers, dont [bold]{dedans}[/bold] dans le perimetre "
-                  f"({len(df) - dedans} desservis par un bus).")
-    console.print(f"   [dim]{config.FICHIER_NORMALISE}[/dim]")
+    if duplicates:
+        console.print(f"   {duplicates} doublon(s) retire(s).")
+    inside = int((df.Perimetre == config.IN_SCOPE).sum())
+    console.print(f"   {len(df)} foyers, dont [bold]{inside}[/bold] dans le "
+                  f"perimetre ({len(df) - inside} desservis par un bus).")
+    console.print(f"   [dim]{config.NORMALISED_FILE}[/dim]")
 
 
-# --------------------------------------------------------------------------
-# Etape 2
-# --------------------------------------------------------------------------
 @app.command()
-def geocoder():
+def geocode():
     """Transforme les adresses en coordonnees. Les resultats sont caches."""
-    _exige(config.FICHIER_NORMALISE, "preparer")
-    _titre("2. Geocodage")
+    _require(config.NORMALISED_FILE, "prepare")
+    console.print("\n[bold]2. Geocodage[/bold]")
 
-    df = pd.read_csv(config.FICHIER_NORMALISE)
-    sub = df[df.Perimetre == "Chatel"].copy()
-    lats, lons, libelles, echecs = geocodage.geocoder_serie(sub["Adresse"], "foyers")
-    sub["lat"], sub["lon"], sub["label_geo"] = lats, lons, libelles
+    df = pd.read_csv(config.NORMALISED_FILE)
+    inside = df[df.Perimetre == config.IN_SCOPE].copy()
+    lats, lons, labels, failures = geocoding.geocode_series(
+        inside["Adresse"],
+        on_progress=lambda i, n: console.print(f"   foyers : {i}/{n}", style="dim"))
+    inside["lat"], inside["lon"], inside["geo_label"] = lats, lons, labels
 
-    if echecs:
-        console.print(f"   [yellow]{len(echecs)} adresse(s) introuvable(s)[/yellow]")
-        for a in echecs:
-            console.print(f"     [dim]- {a}[/dim]")
+    if failures:
+        console.print(f"   [yellow]{len(failures)} adresse(s) introuvable(s)[/yellow]")
+        for address in failures:
+            console.print(f"     [dim]- {address}[/dim]")
 
-    sub = sub.dropna(subset=["lat", "lon"])
-    sub.to_csv(config.FICHIER_GEOCODE, index=False, encoding="utf-8-sig")
-    console.print(f"   [bold]{len(sub)}[/bold] foyers positionnes.")
+    inside = inside.dropna(subset=["lat", "lon"])
+    inside.to_csv(config.GEOCODED_FILE, index=False, encoding="utf-8-sig")
+    console.print(f"   [bold]{len(inside)}[/bold] foyers positionnes.")
 
-    ecoles = []
-    for nom, valeur in config.ECOLES.items():
-        if isinstance(valeur, (tuple, list)):
-            ecoles.append({"nom": nom, "lat": valeur[0], "lon": valeur[1]})
+    schools = []
+    for name, value in config.SCHOOLS.items():
+        if isinstance(value, (tuple, list)):
+            schools.append({"nom": name, "lat": value[0], "lon": value[1]})
             continue
-        g = geocodage.geocoder(valeur)
-        if g:
-            ecoles.append({"nom": nom, "lat": g[0], "lon": g[1]})
+        found = geocoding.geocode(value)
+        if found:
+            schools.append({"nom": name, "lat": found[0], "lon": found[1]})
         else:
-            console.print(f"   [yellow]ecole introuvable :[/yellow] {nom} -> "
-                          f"mets ses coordonnees dans config.py")
-    geocodage.fermer_cache()
-    config.FICHIER_ECOLES.write_text(
-        json.dumps(ecoles, ensure_ascii=False, indent=1), encoding="utf-8")
-    console.print(f"   {len(ecoles)} ecole(s) positionnee(s).")
-    console.print(f"   [dim]{config.FICHIER_GEOCODE}[/dim]")
+            console.print(f"   [yellow]ecole introuvable :[/yellow] {name} "
+                          f"-> mets ses coordonnees dans config.py")
+    geocoding.save_cache()
+    config.SCHOOLS_FILE.write_text(
+        json.dumps(schools, ensure_ascii=False, indent=1), encoding="utf-8")
+    console.print(f"   {len(schools)} ecole(s) positionnee(s).")
+    console.print(f"   [dim]{config.GEOCODED_FILE}[/dim]")
 
 
-# --------------------------------------------------------------------------
-# Etape 3
-# --------------------------------------------------------------------------
 @app.command()
-def grouper(
-    rayon: int = typer.Option(None, "--rayon", "-r",
-                              help="rayon de regroupement en metres"),
-    seuil: int = typer.Option(None, "--seuil", "-s",
-                              help="accompagnants necessaires pour une ligne"),
+def cluster(
+    radius: int = typer.Option(None, "--radius", "-r",
+                               help="rayon de regroupement en metres"),
+    threshold: int = typer.Option(None, "--threshold", "-t",
+                                  help="accompagnants necessaires pour une ligne"),
 ):
-    """Regroupe les domiciles par distance reelle et affiche le recapitulatif."""
-    _exige(config.FICHIER_GEOCODE, "geocoder")
-    rayon = rayon or config.RAYON_CLUSTER_M
-    seuil = seuil or config.SEUIL_LIGNE
-    _titre(f"3. Regroupement a {rayon} m")
+    """Regroupe les domiciles par distance et affiche le recapitulatif."""
+    _require(config.GEOCODED_FILE, "geocode")
+    radius = radius or config.CLUSTER_RADIUS_M
+    threshold = threshold or config.ROUTE_THRESHOLD
+    console.print(f"\n[bold]3. Regroupement a {radius} m[/bold]")
 
-    df = pd.read_csv(config.FICHIER_GEOCODE)
-    df = clusters.calculer(df, rayon_m=rayon)
-    df.to_csv(config.FICHIER_GROUPES, index=False, encoding="utf-8-sig")
+    df = pd.read_csv(config.GEOCODED_FILE)
+    df = clustering.compute(df, radius_m=radius)
+    df.to_csv(config.CLUSTERED_FILE, index=False, encoding="utf-8-sig")
 
-    recap = clusters.recapitulatif(df)
-    if len(recap):
-        console.print(_table_groupes(recap, seuil))
-        pretes = int((recap.accompagnants >= seuil).sum())
-        console.print(f"   [bold green]{pretes}[/bold green] groupe(s) avec "
-                      f"{seuil} accompagnants ou plus.")
+    summary = clustering.summary(df)
+    if len(summary):
+        console.print(_summary_table(summary, threshold))
+        ready = int((summary.volunteers >= threshold).sum())
+        console.print(f"   [bold green]{ready}[/bold green] groupe(s) avec "
+                      f"{threshold} accompagnants ou plus.")
     else:
         console.print("   [yellow]aucun groupe a ce rayon[/yellow]")
     console.print(f"   {int((df.cluster == -1).sum())} point(s) isole(s).")
-    console.print(f"   [dim]{config.FICHIER_GROUPES}[/dim]")
+    console.print(f"   [dim]{config.CLUSTERED_FILE}[/dim]")
 
 
-# --------------------------------------------------------------------------
-# Etape 4
-# --------------------------------------------------------------------------
-@app.command()
-def carte():
+@app.command("map")
+def build_map():
     """Genere la carte HTML sur fond swisstopo."""
-    _exige(config.FICHIER_GROUPES, "grouper")
-    _exige(config.FICHIER_ECOLES, "geocoder")
-    _titre("4. Carte")
+    _require(config.CLUSTERED_FILE, "cluster")
+    _require(config.SCHOOLS_FILE, "geocode")
+    console.print("\n[bold]4. Carte[/bold]")
 
-    df = pd.read_csv(config.FICHIER_GROUPES)
-    ecoles = json.loads(config.FICHIER_ECOLES.read_text(encoding="utf-8"))
-    chemin = module_carte.generer(df, ecoles, clusters.enveloppes(df),
-                                  config.FICHIER_CARTE)
-    console.print(f"   [dim]{chemin}[/dim]")
+    df = pd.read_csv(config.CLUSTERED_FILE)
+    schools = json.loads(config.SCHOOLS_FILE.read_text(encoding="utf-8"))
+    path = mapping.build(df, schools, clustering.envelopes(df), config.MAP_FILE)
+    console.print(f"   [dim]{path}[/dim]")
     console.print("   Ouvre ce fichier dans ton navigateur.")
 
 
-# --------------------------------------------------------------------------
-# Pipeline complet
-# --------------------------------------------------------------------------
-@app.command()
-def tout(
-    rayon: int = typer.Option(None, "--rayon", "-r",
-                              help="rayon de regroupement en metres"),
-    seuil: int = typer.Option(None, "--seuil", "-s",
-                              help="accompagnants necessaires pour une ligne"),
-    sans_carte: bool = typer.Option(False, "--sans-carte",
-                                    help="ne pas generer le HTML"),
+@app.command("all")
+def run_all(
+    radius: int = typer.Option(None, "--radius", "-r",
+                               help="rayon de regroupement en metres"),
+    threshold: int = typer.Option(None, "--threshold", "-t",
+                                  help="accompagnants necessaires pour une ligne"),
+    no_map: bool = typer.Option(False, "--no-map", help="ne pas generer le HTML"),
 ):
     """Enchaine les quatre etapes."""
-    preparer()
-    geocoder()
-    grouper(rayon=rayon, seuil=seuil)
-    if not sans_carte:
-        carte()
+    prepare()
+    geocode()
+    cluster(radius=radius, threshold=threshold)
+    if not no_map:
+        build_map()
 
 
-# --------------------------------------------------------------------------
-# Inspection
-# --------------------------------------------------------------------------
 @app.command()
-def reglages():
+def settings():
     """Affiche la configuration courante."""
-    t = Table(show_header=True, header_style="bold")
-    t.add_column("Reglage")
-    t.add_column("Valeur", overflow="fold")
-    for cle in ["EXCEL", "RAYON_CLUSTER_M", "MIN_FOYERS", "SEUIL_LIGNE",
-                "CERCLES_MIN", "VITESSE_KMH", "ZOOM_MAX"]:
-        t.add_row(cle, str(getattr(config, cle)))
-    t.add_row("ECOLES", "\n".join(f"{k} : {v}" for k, v in config.ECOLES.items()))
-    t.add_row("HORS_PERIMETRE", ", ".join(sorted(config.HORS_PERIMETRE)))
-    t.add_row("RUES", f"{len(config.RUES)} entrees")
-    console.print(t)
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Reglage")
+    table.add_column("Valeur", overflow="fold")
+    for key in ["SURVEY_FILE", "CLUSTER_RADIUS_M", "MIN_HOUSEHOLDS",
+                "ROUTE_THRESHOLD", "WALK_CIRCLES_MIN", "WALK_SPEED_KMH"]:
+        table.add_row(key, str(getattr(config, key)))
+    table.add_row("SCHOOLS", "\n".join(f"{k} : {v}" for k, v in config.SCHOOLS.items()))
+    table.add_row("OUT_OF_SCOPE", ", ".join(sorted(config.OUT_OF_SCOPE)))
+    table.add_row("STREETS", f"{len(config.STREETS)} entrees")
+    console.print(table)
     console.print("[dim]Tout se modifie dans config.py.[/dim]")
 
 

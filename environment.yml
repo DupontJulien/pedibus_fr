@@ -5,8 +5,8 @@ dependencies:
   - python=3.11
   - pandas>=2.0
   - numpy>=1.26
-  - openpyxl>=3.1          # lecture du .xlsx du sondage
-  - requests>=2.31         # appels aux geocodeurs
+  - openpyxl>=3.1          # reads the survey .xlsx
+  - requests>=2.31         # geocoding API calls
   - scikit-learn>=1.4      # DBSCAN
-  - typer>=0.12            # interface en ligne de commande
-  - rich>=13.0             # tableaux en couleur dans le terminal
+  - typer>=0.12            # command-line interface
+  - rich>=13.0             # coloured tables in the terminal
