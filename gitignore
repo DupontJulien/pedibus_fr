@@ -1,0 +1,77 @@
+# ==========================================================================
+# Donnees personnelles  -- ne JAMAIS versionner
+# ==========================================================================
+# Le sondage contient les noms et adresses du domicile de familles avec
+# enfants. Les sorties contiennent en plus leurs coordonnees GPS.
+data/*
+!data/.gitkeep
+sortie/*
+!sortie/.gitkeep
+
+# ==========================================================================
+# Python
+# ==========================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Environnements virtuels
+.venv/
+venv/
+env/
+ENV/
+.conda/
+.python-version
+
+# Variables d'environnement et secrets
+.env
+.env.*
+*.key
+*.pem
+
+# ==========================================================================
+# macOS
+# ==========================================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.DocumentRevisions-V100
+.TemporaryItems
+Icon?
+
+# ==========================================================================
+# Windows / Linux
+# ==========================================================================
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*~
+.directory
+
+# ==========================================================================
+# Editeurs
+# ==========================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+
+# ==========================================================================
+# Divers
+# ==========================================================================
+*.log
+*.tmp
+*.bak
