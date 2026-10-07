@@ -1,0 +1,77 @@
+# ==========================================================================
+# Personal data -- never commit
+# ==========================================================================
+# The survey holds names and home addresses of families with children;
+# the outputs add their GPS coordinates.
+data/*
+!data/.gitkeep
+output/*
+!output/.gitkeep
+
+# ==========================================================================
+# Python
+# ==========================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.conda/
+.python-version
+
+# Secrets
+.env
+.env.*
+*.key
+*.pem
+
+# ==========================================================================
+# macOS
+# ==========================================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.DocumentRevisions-V100
+.TemporaryItems
+Icon?
+
+# ==========================================================================
+# Windows / Linux
+# ==========================================================================
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*~
+.directory
+
+# ==========================================================================
+# Editors
+# ==========================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+
+# ==========================================================================
+# Misc
+# ==========================================================================
+*.log
+*.tmp
+*.bak

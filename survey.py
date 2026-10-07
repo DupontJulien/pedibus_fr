@@ -46,14 +46,73 @@ def _group(street):
     return street.title() if street else config.GROUP_NO_ADDRESS
 
 
+def _first_address(raw):
+    """Some answers list two addresses; keep the first one."""
+    text = re.sub(r"\s+", " ", str(raw).strip())
+    lowered = text.lower()
+    cut = len(text)
+    for separator in config.ADDRESS_SEPARATORS:
+        found = lowered.find(separator)
+        # Ignore a separator before any digit: that is still one address.
+        if found > 0 and any(c.isdigit() for c in text[:found]):
+            cut = min(cut, found)
+    return text[:cut].rstrip(" ,")
+
+
 def _full_address(raw):
     """Add postcode, town and country, without which geocoding fails."""
-    text = re.sub(r"\s+", " ", str(raw).strip())
+    text = _first_address(raw)
     if "1618" not in text and "1619" not in text:
         suffix = (config.POSTCODE_PACCOTS if "paccot" in text.lower()
                   else config.POSTCODE_DEFAULT)
         text = text.rstrip(" ,") + suffix
     return text.rstrip(" ,") + config.COUNTRY
+
+
+def address_key(address):
+    """Normalised address, used to tell one home from another."""
+    flat = _flatten(address)
+    flat = re.sub(r"[^a-z0-9]+", " ", flat)
+    return re.sub(r"\s+", " ", flat).strip()
+
+
+def _drop_renamed_duplicates(df):
+    """Same home, same person written differently.
+
+    At one address, two answers whose name tokens are equal, or where one set
+    is contained in the other ("Carolina" vs "Carolina Vieira"), are the same
+    person. Different names at one address are left alone: they are a couple
+    or two flats, and only the survey's author can tell which.
+    """
+    keep, seen = [], {}
+    for index, row in df.iterrows():
+        key = address_key(row["address"])
+        tokens = frozenset(_flatten(row["name"]).split())
+        duplicate_of = None
+        for previous, previous_tokens in seen.get(key, []):
+            if tokens <= previous_tokens or previous_tokens <= tokens:
+                duplicate_of = previous
+                break
+        if duplicate_of is None:
+            seen.setdefault(key, []).append((index, tokens))
+            keep.append(index)
+        else:
+            # Keep whichever spelling is the fuller one.
+            position = keep.index(duplicate_of)
+            existing = dict(seen[key])[duplicate_of]
+            if len(tokens) > len(existing):
+                keep[position] = index
+                seen[key] = [(index, tokens) if i == duplicate_of else (i, t)
+                             for i, t in seen[key]]
+    return df.loc[keep]
+
+
+def _house_number(raw):
+    """Pull the house number out of an address, '' if there is none."""
+    text = _first_address(raw)
+    text = re.sub(r"\b1618\b|\b1619\b.*", "", text)      # drop postcode and after
+    numbers = re.findall(r"\b(\d{1,4}[a-zA-Z]?)\b", text)
+    return numbers[-1] if numbers else ""
 
 
 def _commitment(row):
@@ -82,12 +141,15 @@ def load():
 
     before = len(df)
     key = df["name"].map(_flatten) + "|" + df["address"].map(_flatten)
-    df = df[~key.duplicated()].copy()
+    df = df[~key.duplicated()]
+    df = _drop_renamed_duplicates(df).copy()
     duplicates = before - len(df)
 
     df["Nom"] = df["name"].astype(str).str.strip()
     df["Adresse"] = df["address"].map(_full_address)
     df["Groupe"] = df["address"].map(lambda a: _group(_street(a)))
+    df["Numero"] = df["address"].map(_house_number)
+    df["Foyer"] = df["address"].map(address_key)
     df["Engagement"] = df.apply(_commitment, axis=1)
     df["Interesse"] = (df["interested"].astype(str).str.startswith("Oui")
                        .map({True: "Oui", False: "Non"}))
@@ -102,7 +164,7 @@ def load():
     df["Moments"] = df["time_slots"].fillna("")
     df["Commentaire"] = df["comment"].fillna("")
 
-    columns = ["Nom", "Adresse", "Groupe", "Interesse", "Engagement",
-               "Perimetre", "Moments", "Commentaire"]
+    columns = ["Nom", "Adresse", "Groupe", "Numero", "Foyer", "Interesse",
+               "Engagement", "Perimetre", "Moments", "Commentaire"]
     out = df[columns].sort_values(["Perimetre", "Groupe", "Nom"])
     return out.reset_index(drop=True), duplicates
